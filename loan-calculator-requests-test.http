@@ -1,0 +1,99 @@
+### Test 1: Standard 30-year mortgage
+POST http://localhost:8080/api/loans/calculate
+Content-Type: application/json
+
+{
+    "loanAmount": 300000,
+    "interestRate": 4.5,
+    "term": 360
+}
+
+### Test 2: 15-year mortgage with higher interest rate
+POST http://localhost:8080/api/loans/calculate
+Content-Type: application/json
+
+{
+    "loanAmount": 200000,
+    "interestRate": 5.75,
+    "term": 180
+}
+
+### Test 3: Small loan with short term
+POST http://localhost:8080/api/loans/calculate
+Content-Type: application/json
+
+{
+    "loanAmount": 10000,
+    "interestRate": 6.0,
+    "term": 24
+}
+
+### Test 4: Large loan with low interest rate
+POST http://localhost:8080/api/loans/calculate
+Content-Type: application/json
+
+{
+    "loanAmount": 1000000,
+    "interestRate": 3.25,
+    "term": 360
+}
+
+### Test 5: Invalid loan amount (zero)
+POST http://localhost:8080/api/loans/calculate
+Content-Type: application/json
+
+{
+    "loanAmount": 0,
+    "interestRate": 5.0,
+    "term": 360
+}
+
+### Test 6: Invalid interest rate (zero)
+POST http://localhost:8080/api/loans/calculate
+Content-Type: application/json
+
+{
+    "loanAmount": 200000,
+    "interestRate": 0,
+    "term": 360
+}
+
+### Test 7: Invalid term (zero)
+POST http://localhost:8080/api/loans/calculate
+Content-Type: application/json
+
+{
+    "loanAmount": 200000,
+    "interestRate": 5.0,
+    "term": 0
+}
+
+### Test 8: Very high interest rate
+POST http://localhost:8080/api/loans/calculate
+Content-Type: application/json
+
+{
+    "loanAmount": 50000,
+    "interestRate": 15.0,
+    "term": 60
+}
+
+### Test 9: Very short term loan
+POST http://localhost:8080/api/loans/calculate
+Content-Type: application/json
+
+{
+    "loanAmount": 5000,
+    "interestRate": 7.5,
+    "term": 6
+}
+
+### Test 10: Large loan with very long term
+POST http://localhost:8080/api/loans/calculate
+Content-Type: application/json
+
+{
+    "loanAmount": 2000000,
+    "interestRate": 4.0,
+    "term": 480
+}

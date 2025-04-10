@@ -1,0 +1,78 @@
+databaseChangeLog:
+  - changeSet:
+      id: 1
+      author: a.aliaksandrou
+      changes:
+        - createTable:
+            tableName: loan
+            columns:
+              - column:
+                  name: id
+                  type: UUID
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: loan_amount
+                  type: DECIMAL(38,2)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: interest_rate
+                  type: DECIMAL(5,2)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: term
+                  type: INT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+
+  - changeSet:
+      id: 2
+      author: a.aliaksandrou
+      changes:
+        - createTable:
+            tableName: loan_payment_schedule
+            columns:
+              - column:
+                  name: id
+                  type: UUID
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: loan_id
+                  type: UUID
+                  constraints:
+                    nullable: false
+              - column:
+                  name: payment_number
+                  type: INT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: payment_date
+                  type: DATE
+              - column:
+                  name: total_payment
+                  type: DECIMAL(38,2)
+              - column:
+                  name: principal
+                  type: DECIMAL(38,2)
+              - column:
+                  name: interest
+                  type: DECIMAL(38,2)
+              - column:
+                  name: remaining_balance
+                  type: DECIMAL(38,2)
+        - addForeignKeyConstraint:
+            baseTableName: loan_payment_schedule
+            baseColumnNames: loan_id
+            referencedTableName: loan
+            referencedColumnNames: id
+            constraintName: fk_schedule_loan
