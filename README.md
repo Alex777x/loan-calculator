@@ -9,7 +9,7 @@ and term.
 
 ### Prerequisites
 
-• Java 24   
+• Java 21   
 • Docker    
 • Maven
 
