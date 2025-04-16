@@ -2,16 +2,21 @@ package pl.aliaksandrou.loancalculator.service;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.cache.CacheManager;
+import org.springframework.cache.annotation.EnableCaching;
+import org.springframework.cache.concurrent.ConcurrentMapCacheManager;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import pl.aliaksandrou.loancalculator.LoanCalculatorApplication;
 import pl.aliaksandrou.loancalculator.dto.LoanCalculationRequest;
 import pl.aliaksandrou.loancalculator.dto.LoanCalculationResponse;
 import pl.aliaksandrou.loancalculator.model.Loan;
 import pl.aliaksandrou.loancalculator.model.LoanPaymentSchedule;
-import pl.aliaksandrou.loancalculator.repository.LoanPaymentScheduleRepository;
 import pl.aliaksandrou.loancalculator.repository.LoanRepository;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.context.ActiveProfiles;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -24,17 +29,23 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
-@SpringBootTest
+@SpringBootTest(classes = LoanCalculatorApplication.class)
 @ActiveProfiles("test")
 class LoanCalculationServiceTest {
 
-    @Mock
+    @Configuration
+    @EnableCaching
+    static class CacheConfig {
+        @Bean
+        public CacheManager cacheManager() {
+            return new ConcurrentMapCacheManager("loanSchedule");
+        }
+    }
+
+    @MockitoBean
     private LoanRepository loanRepository;
 
-    @Mock
-    private LoanPaymentScheduleRepository paymentScheduleRepository;
-
-    @InjectMocks
+    @Autowired
     private LoanCalculationService loanCalculationService;
 
     private LoanCalculationRequest request;
@@ -54,6 +65,7 @@ class LoanCalculationServiceTest {
                 .loanAmount(request.getLoanAmount())
                 .interestRate(request.getInterestRate())
                 .term(request.getTerm())
+                .monthlyPayment(new BigDecimal("567.79"))
                 .build();
 
         existingPaymentSchedules = new ArrayList<>();
@@ -71,38 +83,160 @@ class LoanCalculationServiceTest {
 
     @Test
     void calculateLoanSchedule_WithExistingLoan_ReturnsCachedResult() {
+        // 1. Evict the cache to ensure we don't reuse from previous test
+        loanCalculationService.evictLoanScheduleCache(request);
+
+        // 2. Set up mock
         when(loanRepository.findByLoanAmountAndInterestRateAndTerm(
                 request.getLoanAmount(), request.getInterestRate(), request.getTerm()))
                 .thenReturn(Optional.of(existingLoan));
-        when(paymentScheduleRepository.findByLoanId(existingLoan.getId()))
-                .thenReturn(existingPaymentSchedules);
 
-        LoanCalculationResponse response = loanCalculationService.calculateLoanSchedule(request);
+        // 3. First call - should hit DB
+        LoanCalculationResponse response1 = loanCalculationService.calculateLoanSchedule(request);
+        assertNotNull(response1);
 
-        assertNotNull(response);
-        assertEquals(request.getLoanAmount(), response.getLoanAmount());
-        assertEquals(request.getInterestRate(), response.getInterestRate());
-        assertEquals(1, response.getPayments().size());
+        // Verify DB call
         verify(loanRepository, times(1)).findByLoanAmountAndInterestRateAndTerm(
                 request.getLoanAmount(), request.getInterestRate(), request.getTerm());
-        verify(paymentScheduleRepository, never()).saveAll(any());
+
+        // 4. Reset mock to track 2nd call separately
+        reset(loanRepository);
+
+        // 5. Second call - should come from cache, no DB call
+        LoanCalculationResponse response2 = loanCalculationService.calculateLoanSchedule(request);
+        assertNotNull(response2);
+
+        // Should NOT hit repository again
+        verify(loanRepository, times(0)).findByLoanAmountAndInterestRateAndTerm(
+                request.getLoanAmount(), request.getInterestRate(), request.getTerm());
+
+        // Same results
+        assertEquals(response1.getMonthlyPayment(), response2.getMonthlyPayment());
+    }
+
+    @Test
+    void calculateLoanSchedule_WithDifferentParameters_DoesNotUseCache() {
+        when(loanRepository.findByLoanAmountAndInterestRateAndTerm(
+                request.getLoanAmount(), request.getInterestRate(), request.getTerm()))
+                .thenReturn(Optional.of(existingLoan));
+
+        LoanCalculationResponse response1 = loanCalculationService.calculateLoanSchedule(request);
+        assertNotNull(response1);
+
+        verify(loanRepository, times(1)).findByLoanAmountAndInterestRateAndTerm(
+                request.getLoanAmount(), request.getInterestRate(), request.getTerm());
+
+        LoanCalculationRequest differentRequest = LoanCalculationRequest.builder()
+                .loanAmount(request.getLoanAmount())
+                .interestRate(request.getInterestRate().add(BigDecimal.ONE))
+                .term(request.getTerm())
+                .build();
+
+        when(loanRepository.findByLoanAmountAndInterestRateAndTerm(
+                differentRequest.getLoanAmount(), differentRequest.getInterestRate(), differentRequest.getTerm()))
+                .thenReturn(Optional.empty());
+        when(loanRepository.save(any(Loan.class))).thenReturn(existingLoan);
+
+        LoanCalculationResponse response2 = loanCalculationService.calculateLoanSchedule(differentRequest);
+        assertNotNull(response2);
+
+        verify(loanRepository, times(1)).findByLoanAmountAndInterestRateAndTerm(
+                differentRequest.getLoanAmount(), differentRequest.getInterestRate(), differentRequest.getTerm());
+    }
+
+    @Test
+    void evictLoanScheduleCache_RemovesCachedResult() {
+        // Make sure the cache is clean before this test
+        loanCalculationService.evictLoanScheduleCache(request);
+
+        when(loanRepository.findByLoanAmountAndInterestRateAndTerm(
+                request.getLoanAmount(), request.getInterestRate(), request.getTerm()))
+                .thenReturn(Optional.of(existingLoan));
+
+        // First call - should populate cache
+        LoanCalculationResponse response1 = loanCalculationService.calculateLoanSchedule(request);
+        assertNotNull(response1);
+
+        // Should be 1 call to DB
+        verify(loanRepository, times(1)).findByLoanAmountAndInterestRateAndTerm(
+                request.getLoanAmount(), request.getInterestRate(), request.getTerm());
+
+        // Evict cache
+        loanCalculationService.evictLoanScheduleCache(request);
+
+        // Reset mock to track second interaction separately
+        reset(loanRepository);
+
+        when(loanRepository.findByLoanAmountAndInterestRateAndTerm(
+                request.getLoanAmount(), request.getInterestRate(), request.getTerm()))
+                .thenReturn(Optional.of(existingLoan));
+
+        // Call again — should hit DB again due to cache eviction
+        LoanCalculationResponse response2 = loanCalculationService.calculateLoanSchedule(request);
+        assertNotNull(response2);
+
+        verify(loanRepository, times(1)).findByLoanAmountAndInterestRateAndTerm(
+                request.getLoanAmount(), request.getInterestRate(), request.getTerm());
     }
 
     @Test
     void calculateLoanSchedule_WithNewLoan_CreatesAndSavesNewLoan() {
+        loanCalculationService.evictLoanScheduleCache(request); // 💥 clear cache
+
         when(loanRepository.findByLoanAmountAndInterestRateAndTerm(
                 request.getLoanAmount(), request.getInterestRate(), request.getTerm()))
                 .thenReturn(Optional.empty());
         when(loanRepository.save(any(Loan.class))).thenReturn(existingLoan);
-        when(paymentScheduleRepository.saveAll(any())).thenReturn(existingPaymentSchedules);
 
         LoanCalculationResponse response = loanCalculationService.calculateLoanSchedule(request);
 
         assertNotNull(response);
         assertEquals(request.getLoanAmount(), response.getLoanAmount());
         assertEquals(request.getInterestRate(), response.getInterestRate());
+
         verify(loanRepository, times(1)).save(any(Loan.class));
-        verify(paymentScheduleRepository, times(1)).saveAll(any());
+    }
+
+    @Test
+    void calculateMonthlyPayment_WithValidInputs_ReturnsCorrectValue() {
+        BigDecimal monthlyPayment = loanCalculationService.calculateMonthlyPayment(request);
+
+        assertNotNull(monthlyPayment);
+        assertEquals(0, monthlyPayment.compareTo(new BigDecimal("567.79")));
+    }
+
+    @Test
+    void calculateMonthlyPayment_WithZeroInterest_ReturnsSimpleDivision() {
+        request = LoanCalculationRequest.builder()
+                .loanAmount(new BigDecimal("120000"))
+                .interestRate(BigDecimal.ZERO)
+                .term(360)
+                .build();
+
+        BigDecimal monthlyPayment = loanCalculationService.calculateMonthlyPayment(request);
+
+        assertNotNull(monthlyPayment);
+        assertEquals(0, monthlyPayment.compareTo(new BigDecimal("333.33")));
+    }
+
+    @Test
+    void generatePaymentSchedule_WithValidInputs_ReturnsCorrectSchedule() {
+        List<LoanPaymentSchedule> schedules = loanCalculationService.generatePaymentSchedule(existingLoan, existingLoan.getMonthlyPayment());
+
+        assertNotNull(schedules);
+        assertEquals(existingLoan.getTerm(), schedules.size());
+
+        LoanPaymentSchedule firstPayment = schedules.get(0);
+        assertEquals(1, firstPayment.getPaymentNumber());
+        assertNotNull(firstPayment.getPaymentDate());
+        assertEquals(0, firstPayment.getTotalPayment().compareTo(existingLoan.getMonthlyPayment()));
+        assertTrue(firstPayment.getPrincipal().compareTo(BigDecimal.ZERO) > 0);
+        assertTrue(firstPayment.getInterest().compareTo(BigDecimal.ZERO) > 0);
+        assertTrue(firstPayment.getRemainingBalance().compareTo(BigDecimal.ZERO) > 0);
+
+        LoanPaymentSchedule lastPayment = schedules.get(schedules.size() - 1);
+        assertEquals(existingLoan.getTerm(), lastPayment.getPaymentNumber());
+        assertEquals(0, lastPayment.getRemainingBalance().compareTo(BigDecimal.ZERO));
     }
 
     @Test
@@ -137,4 +271,4 @@ class LoanCalculationServiceTest {
 
         assertThrows(IllegalArgumentException.class, () -> loanCalculationService.calculateLoanSchedule(request));
     }
-} 
+}
